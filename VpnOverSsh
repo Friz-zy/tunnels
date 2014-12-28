@@ -15,7 +15,7 @@ EOF
     return 0
 }
 
-options=$(getopt -o hp:n: -l help,rootfs:,path:,name: -- "$@")
+options=$(getopt -o hu:H:p: -l help,user:,host:,port: -- "$@")
 if [ $? -ne 0 ]; then
     usage $(basename $0)
     exit 1
