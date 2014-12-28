@@ -1,0 +1,239 @@
+#!/bin/bash
+# Copyright (c) 2014 Filipp Kucheryavy aka Frizzy <filipp.s.frizzy@gmail.com>
+# The MIT License (MIT)
+# part of the https://github.com/Friz-zy/tunnels
+
+
+USER='root'
+PORT='22'
+
+usage()
+{
+    cat <<EOF
+$1 -h|--help -u|--user=<user> -H|--host=<host> -p|--port=<port>
+EOF
+    return 0
+}
+
+options=$(getopt -o hp:n: -l help,rootfs:,path:,name: -- "$@")
+if [ $? -ne 0 ]; then
+    usage $(basename $0)
+    exit 1
+fi
+eval set -- "$options"
+
+while true
+do
+    case "$1" in
+        -h|--help)      usage $0 && exit 0;;
+        -u|--user)      USER=$2; shift 2;;
+        -H|--host)      HOST=$2; shift 2;;
+        -p|--port)      PORT=$2; shift 2;;
+        *)              break ;;
+    esac
+done
+
+if [ "$(id -u)" != "0" ]; then
+    echo "This script should be run as 'root'"
+    exit 1
+fi
+
+if [ -z "$HOST" ]; then
+    echo "'host' parameter is required"
+    usage $0
+    exit 1
+fi
+
+IP="$(nslookup $HOST | awk '/^Address: / { print $2 ; exit }')"
+DEFGATE=$(ip route | awk '/default/ { print $3 }')
+
+
+# save defaults
+if [ -f /tmp/rout.rules ]; then
+    echo "Backup of routes (/tmp/rout.rules) exists."
+    read -p "Are you want to overwrite its by current rules? " -n 1 -r
+    echo    # (optional) move to a new line
+    if [[ $REPLY =~ ^[Yy]$ ]]
+    then
+        ip rout save > /tmp/rout.rules
+    fi
+else
+    ip rout save > /tmp/rout.rules
+fi
+if [ -f /tmp/iptables.rules ]; then
+    echo "Backup of iptables (/tmp/iptables.rules) exists."
+    read -p "Are you want to overwrite its by current rules? " -n 1 -r
+    echo    # (optional) move to a new line
+    if [[ $REPLY =~ ^[Yy]$ ]]
+    then
+        iptables-save > /tmp/iptables.rules
+    fi
+else
+    iptables-save > /tmp/iptables.rules
+fi
+if [ -f /tmp/ip6tables.rules ]; then
+    echo "Backup of iptables (/tmp/ip6tables.rules) exists."
+    read -p "Are you want to overwrite its by current rules? " -n 1 -r
+    echo    # (optional) move to a new line
+    if [[ $REPLY =~ ^[Yy]$ ]]
+    then
+        ip6tables-save > /tmp/ip6tables.rules
+    fi
+else
+    ip6tables-save > /tmp/ip6tables.rules
+fi
+
+
+# set new iptables rules
+read -p "Are you want to overwrite current routes and iptable rules? " -n 1 -r
+echo    # (optional) move to a new line
+if [[ ! $REPLY =~ ^[Yy]$ ]]
+then
+    echo "Aborting..."
+    exit 1
+fi
+
+## flush existing rules
+iptables -F INPUT
+iptables -F OUTPUT
+iptables -F FORWARD
+
+ip6tables -F INPUT
+ip6tables -F OUTPUT
+ip6tables -F FORWARD
+
+
+## allow loopback access
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A OUTPUT -o lo -j ACCEPT
+
+ip6tables -A INPUT -i lo -j ACCEPT
+ip6tables -A OUTPUT -o lo -j ACCEPT
+
+
+## allow already established/accepted connections on all devices
+## put in front for performance reasons
+#iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+#iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+#ip6tables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+#ip6tables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+
+## make sure that you can communicate within your own network
+iptables -A INPUT -s 192.168.0.0/16 -d 192.168.0.0/16 -j ACCEPT
+iptables -A OUTPUT -s 192.168.0.0/16 -d 192.168.0.0/16 -j ACCEPT
+## lxc, vpn, work, etc...
+iptables -A INPUT -s 10.0.0.0/24 -d 10.0.0.0/24 -j ACCEPT
+iptables -A OUTPUT -s 10.0.0.0/24 -d 10.0.0.0/24 -j ACCEPT
+
+ip6tables -A INPUT -s fe80::/64 -d fe80::/64 -j ACCEPT
+ip6tables -A OUTPUT -s fe80::/64 -d fe80::/64 -j ACCEPT
+
+
+## disable ssh connections over vpn. You just need to disable it, if you have setup port forwarding to your ssh port
+#iptables -A INPUT -i tun0 -p tcp --dport ssh -j DROP
+
+#ip6tables -A INPUT -i tun0 -p tcp --dport ssh -j DROP
+
+
+## allow vpn establishment
+iptables -A OUTPUT -p udp --dport 1194 -j ACCEPT
+iptables -A INPUT -p udp --sport 1194 -j ACCEPT
+
+ip6tables -A OUTPUT -p udp --dport 1194 -j ACCEPT
+ip6tables -A INPUT -p udp --sport 1194 -j ACCEPT
+
+
+## accept all tun connections
+iptables -A OUTPUT -o tun+ -j ACCEPT
+iptables -A INPUT -i tun+ -j ACCEPT
+
+ip6tables -A OUTPUT -o tun+ -j ACCEPT
+ip6tables -A INPUT -i tun+ -j ACCEPT
+
+
+## lxc
+iptables -A POSTROUTING -o lxcbr0 -p udp -m udp --dport 68 -j CHECKSUM --checksum-fill
+iptables -A POSTROUTING -s 10.0.3.0/24 ! -d 10.0.3.0/24 -j MASQUERADE
+iptables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 53 -j ACCEPT
+iptables -A INPUT -i lxcbr0 -p udp -m udp --dport 53 -j ACCEPT
+iptables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 67 -j ACCEPT
+iptables -A INPUT -i lxcbr0 -p udp -m udp --dport 67 -j ACCEPT
+iptables -A FORWARD -o lxcbr0 -j ACCEPT
+iptables -A FORWARD -i lxcbr0 -j ACCEPT
+
+ip6tables -A POSTROUTING -o lxcbr0 -p udp -m udp --dport 68 -j CHECKSUM --checksum-fill
+ip6tables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 53 -j ACCEPT
+ip6tables -A INPUT -i lxcbr0 -p udp -m udp --dport 53 -j ACCEPT
+ip6tables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 67 -j ACCEPT
+ip6tables -A INPUT -i lxcbr0 -p udp -m udp --dport 67 -j ACCEPT
+ip6tables -A FORWARD -o lxcbr0 -j ACCEPT
+ip6tables -A FORWARD -i lxcbr0 -j ACCEPT
+
+
+## ssh to proxy host
+iptables -A INPUT -p tcp -s $IP -j ACCEPT
+iptables -A OUTPUT -p tcp --dport $PORT -d $IP -j ACCEPT
+
+ip6tables -A INPUT -p tcp -s $IP -j ACCEPT
+ip6tables -A OUTPUT -p tcp --dport $PORT -d $IP -j ACCEPT
+
+
+## set default policy
+iptables -P INPUT DROP
+iptables -P OUTPUT DROP
+iptables -P FORWARD DROP
+
+ip6tables -P INPUT DROP
+ip6tables -P OUTPUT DROP
+ip6tables -P FORWARD DROP
+
+
+# set new routes
+ip route add $IP via $DEFGATE
+#ip route add 8.8.8.8 via $DEFGATE
+ip route replace default via 10.0.8.2
+
+
+# ppp tunnel
+echo "Creating tunnel..."
+## ppp doesn't work on openvz: Couldn't open the /dev/ppp device: Operation not permitted
+## requared ppp module in kernel
+pppd updetach noauth silent nodeflate pty "ssh -C2t -p $PORT $USER@$HOST sudo pppd nodetach notty noauth" ipparam vpn 10.0.8.1:10.0.8.2
+
+## or
+
+## sshd tunnel
+## requared tun module in kernel
+# requared options in /etc/ssh/sshd_config: PermitRootLogin without-password & PermitTunnel yes & AllowTcpForwarding yes 
+#ssh \
+#  -C2t \
+#  -o Tunnel=yes \
+#  -o TunnelDevice=any:any \
+#  -o PermitLocalCommand=yes \
+#  -o LocalCommand="ifconfig tun5 10.0.8.1 pointopoint 10.0.8.2 netmask 255.255.255.0" \
+#  -o ServerAliveInterval=60 \
+#  -w 5:5 -p $PORT $USER@$HOST \
+#  'sudo ifconfig tun5 10.0.8.2 pointopoint 10.0.8.1 netmask 255.255.255.0 && \
+#  sudo iptables -t nat -A POSTROUTING -s 10.0.8.1 -j MASQUERADE && \
+#  sudo sysctl -w net.ipv4.ip_forward=1'
+#ssh -C2f -w5:5 -p $PORT $USER@$HOST \
+#        -o ServerAliveInterval=30 \
+#        -o ServerAliveCountMax=5 \
+#        -o TCPKeepAlive=yes \
+#        -i ~/.ssh/key "sleep 1000000000"
+
+
+echo "Warning, the tunnel became into a pumpkin!"
+echo "You got out of the security zone!"
+
+read -p "Are you want restore default routes and iptable rules? " -n 1 -r
+echo    # (optional) move to a new line
+if [[ $REPLY =~ ^[Yy]$ ]]
+then
+    # restor defaults
+    ip rout restore < /tmp/rout.rules
+    iptables-restore < /tmp/iptables.rules
+    ip6tables-restore < /tmp/ip6tables.rules
+fi
