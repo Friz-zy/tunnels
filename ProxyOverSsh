@@ -1,0 +1,183 @@
+#!/bin/bash
+# Copyright (c) 2014 Filipp Kucheryavy aka Frizzy <filipp.s.frizzy@gmail.com>
+# The MIT License (MIT)
+# part of the https://github.com/Friz-zy/tunnels
+
+
+USER='root'
+PORT='22'
+PROXY='3128'
+
+usage()
+{
+    cat <<EOF
+$1 -h|--help -u|--user=<user> -H|--host=<host> -p|--port=<port> -P|--proxy=<proxy_port>
+EOF
+    return 0
+}
+
+options=$(getopt -o hu:H:p:P: -l help,user:,host:,port:,proxy: -- "$@")
+if [ $? -ne 0 ]; then
+    usage $(basename $0)
+    exit 1
+fi
+eval set -- "$options"
+
+while true
+do
+    case "$1" in
+        -h|--help)      usage $0 && exit 0;;
+        -u|--user)      USER=$2; shift 2;;
+        -H|--host)      HOST=$2; shift 2;;
+        -p|--port)      PORT=$2; shift 2;;
+        -P|--proxy)      PORT=$2; shift 2;;
+        *)              break ;;
+    esac
+done
+
+if [ "$(id -u)" != "0" ]; then
+    echo "This script should be run as 'root'"
+    exit 1
+fi
+
+if [ -z "$HOST" ]; then
+    echo "'host' parameter is required"
+    usage $0
+    exit 1
+fi
+
+IP="$(nslookup $HOST | awk '/^Address: / { print $2 ; exit }')"
+DEFGATE=$(ip route | awk '/default/ { print $3 }')
+
+
+# save defaults
+if [ -f /tmp/iptables.rules ]; then
+    echo "Backup of iptables (/tmp/iptables.rules) exists."
+    read -p "Are you want to overwrite its by current rules? " -n 1 -r
+    echo    # (optional) move to a new line
+    if [[ $REPLY =~ ^[Yy]$ ]]
+    then
+        iptables-save > /tmp/iptables.rules
+    fi
+else
+    iptables-save > /tmp/iptables.rules
+fi
+if [ -f /tmp/ip6tables.rules ]; then
+    echo "Backup of iptables (/tmp/ip6tables.rules) exists."
+    read -p "Are you want to overwrite its by current rules? " -n 1 -r
+    echo    # (optional) move to a new line
+    if [[ $REPLY =~ ^[Yy]$ ]]
+    then
+        ip6tables-save > /tmp/ip6tables.rules
+    fi
+else
+    ip6tables-save > /tmp/ip6tables.rules
+fi
+
+
+# set new iptables rules
+read -p "Are you want to overwrite current iptable rules? " -n 1 -r
+echo    # (optional) move to a new line
+if [[ ! $REPLY =~ ^[Yy]$ ]]
+then
+    echo "Aborting..."
+    exit 1
+fi
+
+## flush existing rules
+iptables -F INPUT
+iptables -F OUTPUT
+iptables -F FORWARD
+
+ip6tables -F INPUT
+ip6tables -F OUTPUT
+ip6tables -F FORWARD
+
+
+## allow loopback access
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A OUTPUT -o lo -j ACCEPT
+
+ip6tables -A INPUT -i lo -j ACCEPT
+ip6tables -A OUTPUT -o lo -j ACCEPT
+
+
+## allow already established/accepted connections on all devices
+## put in front for performance reasons
+#iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+#iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+#ip6tables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+#ip6tables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+
+## make sure that you can communicate within your own network
+iptables -A INPUT -s 192.168.0.0/16 -d 192.168.0.0/16 -j ACCEPT
+iptables -A OUTPUT -s 192.168.0.0/16 -d 192.168.0.0/16 -j ACCEPT
+## lxc, vpn, work, etc...
+iptables -A INPUT -s 10.0.0.0/24 -d 10.0.0.0/24 -j ACCEPT
+iptables -A OUTPUT -s 10.0.0.0/24 -d 10.0.0.0/24 -j ACCEPT
+
+ip6tables -A INPUT -s fe80::/64 -d fe80::/64 -j ACCEPT
+ip6tables -A OUTPUT -s fe80::/64 -d fe80::/64 -j ACCEPT
+
+
+## disable ssh connections over vpn. You just need to disable it, if you have setup port forwarding to your ssh port
+#iptables -A INPUT -i tun0 -p tcp --dport ssh -j DROP
+
+#ip6tables -A INPUT -i tun0 -p tcp --dport ssh -j DROP
+
+
+## accept all tun connections
+iptables -A OUTPUT -o tun+ -j ACCEPT
+iptables -A INPUT -i tun+ -j ACCEPT
+
+ip6tables -A OUTPUT -o tun+ -j ACCEPT
+ip6tables -A INPUT -i tun+ -j ACCEPT
+
+
+## lxc
+iptables -A POSTROUTING -o lxcbr0 -p udp -m udp --dport 68 -j CHECKSUM --checksum-fill
+iptables -A POSTROUTING -s 10.0.3.0/24 ! -d 10.0.3.0/24 -j MASQUERADE
+iptables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 53 -j ACCEPT
+iptables -A INPUT -i lxcbr0 -p udp -m udp --dport 53 -j ACCEPT
+iptables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 67 -j ACCEPT
+iptables -A INPUT -i lxcbr0 -p udp -m udp --dport 67 -j ACCEPT
+iptables -A FORWARD -o lxcbr0 -j ACCEPT
+iptables -A FORWARD -i lxcbr0 -j ACCEPT
+
+ip6tables -A POSTROUTING -o lxcbr0 -p udp -m udp --dport 68 -j CHECKSUM --checksum-fill
+ip6tables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 53 -j ACCEPT
+ip6tables -A INPUT -i lxcbr0 -p udp -m udp --dport 53 -j ACCEPT
+ip6tables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 67 -j ACCEPT
+ip6tables -A INPUT -i lxcbr0 -p udp -m udp --dport 67 -j ACCEPT
+ip6tables -A FORWARD -o lxcbr0 -j ACCEPT
+ip6tables -A FORWARD -i lxcbr0 -j ACCEPT
+
+
+## ssh to proxy host
+iptables -A INPUT -p tcp -s $IP -j ACCEPT
+iptables -A OUTPUT -p tcp --dport $PORT -d $IP -j ACCEPT
+
+ip6tables -A INPUT -p tcp -s $IP -j ACCEPT
+ip6tables -A OUTPUT -p tcp --dport $PORT -d $IP -j ACCEPT
+
+
+iptables -t nat -A OUTPUT -p tcp -j REDIRECT --to-ports $PROXY
+
+
+# start proxy
+ssh -C2qTnN -D $PROXY -p $PORT $USER@$IP
+
+
+echo "Warning, the tunnel became into a pumpkin!"
+echo "You got out of the security zone!"
+
+read -p "Are you want restore default routes and iptable rules? " -n 1 -r
+echo    # (optional) move to a new line
+if [[ $REPLY =~ ^[Yy]$ ]]
+then
+    # restor defaults
+    iptables-restore < /tmp/iptables.rules
+    ip6tables-restore < /tmp/ip6tables.rules
+fi
