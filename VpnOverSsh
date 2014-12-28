@@ -6,16 +6,9 @@
 
 USER='root'
 PORT='22'
+KEY=""
 
-usage()
-{
-    cat <<EOF
-$1 -h|--help -u|--user=<user> -H|--host=<host> -p|--port=<port>
-EOF
-    return 0
-}
-
-options=$(getopt -o hu:H:p: -l help,user:,host:,port: -- "$@")
+options=$(getopt -o hu:H:p:k: -l help,user:,host:,port:,key: -- "$@")
 if [ $? -ne 0 ]; then
     usage $(basename $0)
     exit 1
@@ -29,6 +22,7 @@ do
         -u|--user)      USER=$2; shift 2;;
         -H|--host)      HOST=$2; shift 2;;
         -p|--port)      PORT=$2; shift 2;;
+        -k|--key)       KEY=$2; shift 2;;
         *)              break ;;
     esac
 done
@@ -47,6 +41,9 @@ fi
 IP="$(nslookup $HOST | awk '/^Address: / { print $2 ; exit }')"
 DEFGATE=$(ip route | awk '/default/ { print $3 }')
 
+if [ -n "$KEY" ]; then
+    KEY="-i $KEY"
+fi
 
 # save defaults
 if [ -f /tmp/rout.rules ]; then
@@ -200,7 +197,7 @@ ip route replace default via 10.0.8.2
 echo "Creating tunnel..."
 ## ppp doesn't work on openvz: Couldn't open the /dev/ppp device: Operation not permitted
 ## requared ppp module in kernel
-pppd updetach noauth silent nodeflate pty "ssh -C2t -p $PORT $USER@$HOST sudo pppd nodetach notty noauth" ipparam vpn 10.0.8.1:10.0.8.2
+pppd updetach noauth silent nodeflate pty "ssh -C2t -p $PORT $KEY $USER@$HOST sudo pppd nodetach notty noauth" ipparam vpn 10.0.8.1:10.0.8.2
 
 ## or
 
@@ -214,11 +211,11 @@ pppd updetach noauth silent nodeflate pty "ssh -C2t -p $PORT $USER@$HOST sudo pp
 #  -o PermitLocalCommand=yes \
 #  -o LocalCommand="ifconfig tun5 10.0.8.1 pointopoint 10.0.8.2 netmask 255.255.255.0" \
 #  -o ServerAliveInterval=60 \
-#  -w 5:5 -p $PORT $USER@$HOST \
+#  -w 5:5 -p $PORT $KEY $USER@$HOST \
 #  'sudo ifconfig tun5 10.0.8.2 pointopoint 10.0.8.1 netmask 255.255.255.0 && \
 #  sudo iptables -t nat -A POSTROUTING -s 10.0.8.1 -j MASQUERADE && \
 #  sudo sysctl -w net.ipv4.ip_forward=1'
-#ssh -C2f -w5:5 -p $PORT $USER@$HOST \
+#ssh -C2f -w5:5 -p $PORT $KEY $USER@$HOST \
 #        -o ServerAliveInterval=30 \
 #        -o ServerAliveCountMax=5 \
 #        -o TCPKeepAlive=yes \
