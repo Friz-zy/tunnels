@@ -142,12 +142,27 @@ then
     iptables -t nat -F REDSOCKS 2>/dev/null
     iptables -t nat -X REDSOCKS 2>/dev/null
 
+    ip6tables -t nat -D PREROUTING -p tcp -j REDSOCKS_FILTER 2>/dev/null
+    ip6ables -t nat -D OUTPUT     -p tcp -j REDSOCKS_FILTER 2>/dev/null
+    ip6ables -t nat -F REDSOCKS_FILTER 2>/dev/null
+    ip6ables -t nat -X REDSOCKS_FILTER 2>/dev/null
+    ip6ables -t nat -F REDSOCKS 2>/dev/null
+    ip6ables -t nat -X REDSOCKS 2>/dev/null
+
+
     # Create our own chain
     iptables -t nat -N REDSOCKS
     iptables -t nat -N REDSOCKS_FILTER
 
+    ip6ables -t nat -N REDSOCKS
+    ip6ables -t nat -N REDSOCKS_FILTER
+
+
     # Do not try to redirect local traffic
     iptables -t nat -I REDSOCKS_FILTER -o lo -j RETURN
+
+    ip6tables -t nat -I REDSOCKS_FILTER -o lo -j RETURN
+
 
     ## Do not redirect LAN traffic and some other reserved addresses. (blacklist option)
     iptables -t nat -A REDSOCKS_FILTER -d 0.0.0.0/8 -j RETURN
@@ -160,19 +175,33 @@ then
     iptables -t nat -A REDSOCKS_FILTER -d 240.0.0.0/4 -j RETURN
     iptables -t nat -A REDSOCKS_FILTER -j REDSOCKS
 
+    ip6tables -t nat -A REDSOCKS_FILTER -d fe80::/64 -j RETURN
+
+
     ## Do not redirect traffic for the SOCKS-Server
     ## Not needed if server is not on a whitelist or is already blacklisted.
     iptables -t nat -I REDSOCKS -p tcp -d $IP --dport $PORT -j RETURN
 
+    ip6tables -t nat -I REDSOCKS -p tcp -d $IP --dport $PORT -j RETURN
+
+
     # Redirect all traffic that gets to the end of our chain
     iptables -t nat -A REDSOCKS   -p tcp -j REDIRECT --to-port $REDPORT
+
+    ip6tables -t nat -A REDSOCKS   -p tcp -j REDIRECT --to-port $REDPORT
+
 
     ## Filter all traffic from the own host
     ## BE CAREFULL HERE IF THE SOCKS-SERVER RUNS ON THIS MACHINE
     iptables -t nat -A OUTPUT     -p tcp -j REDSOCKS_FILTER
 
+    ip6tables -t nat -A OUTPUT     -p tcp -j REDSOCKS_FILTER
+
+
     # Filter all traffic that is routed over this host
     iptables -t nat -A PREROUTING -p tcp -j REDSOCKS_FILTER
+
+    ip6tables -t nat -A PREROUTING -p tcp -j REDSOCKS_FILTER
 fi
 
 
