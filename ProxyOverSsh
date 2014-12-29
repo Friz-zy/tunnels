@@ -3,7 +3,7 @@
 # The MIT License (MIT)
 # part of the https://github.com/Friz-zy/tunnels
 
-# http://przemoc.net/tips/linux#making_socks_proxy_transparent
+# http://linuxaria.com/article/redirect-all-tcp-traffic-through-transparent-socks5-proxy-in-linux
 
 
 USER='root'
@@ -135,47 +135,36 @@ read -p "Are you want to overwrite current iptable rules? " -n 1 -r
 echo    # (optional) move to a new line
 if [[ $REPLY =~ ^[Yy]$ ]]
 then
-    iptables -t nat -D PREROUTING -p tcp -j REDSOCKS_FILTER 2>/dev/null
-    iptables -t nat -D OUTPUT     -p tcp -j REDSOCKS_FILTER 2>/dev/null
-    iptables -t nat -F REDSOCKS_FILTER 2>/dev/null
-    iptables -t nat -X REDSOCKS_FILTER 2>/dev/null
     iptables -t nat -F REDSOCKS 2>/dev/null
     iptables -t nat -X REDSOCKS 2>/dev/null
 
-    ip6tables -t nat -D PREROUTING -p tcp -j REDSOCKS_FILTER 2>/dev/null
-    ip6ables -t nat -D OUTPUT     -p tcp -j REDSOCKS_FILTER 2>/dev/null
-    ip6ables -t nat -F REDSOCKS_FILTER 2>/dev/null
-    ip6ables -t nat -X REDSOCKS_FILTER 2>/dev/null
     ip6ables -t nat -F REDSOCKS 2>/dev/null
     ip6ables -t nat -X REDSOCKS 2>/dev/null
 
 
     # Create our own chain
     iptables -t nat -N REDSOCKS
-    iptables -t nat -N REDSOCKS_FILTER
 
     ip6ables -t nat -N REDSOCKS
-    ip6ables -t nat -N REDSOCKS_FILTER
 
 
     # Do not try to redirect local traffic
-    iptables -t nat -I REDSOCKS_FILTER -o lo -j RETURN
+    iptables -t nat -I REDSOCKS -o lo -j RETURN
 
-    ip6tables -t nat -I REDSOCKS_FILTER -o lo -j RETURN
+    ip6tables -t nat -I REDSOCKS -o lo -j RETURN
 
 
     ## Do not redirect LAN traffic and some other reserved addresses. (blacklist option)
-    iptables -t nat -A REDSOCKS_FILTER -d 0.0.0.0/8 -j RETURN
-    iptables -t nat -A REDSOCKS_FILTER -d 10.0.0.0/24 -j RETURN
-    iptables -t nat -A REDSOCKS_FILTER -d 127.0.0.0/8 -j RETURN
-    iptables -t nat -A REDSOCKS_FILTER -d 169.254.0.0/16 -j RETURN
-    iptables -t nat -A REDSOCKS_FILTER -d 172.16.0.0/12 -j RETURN
-    iptables -t nat -A REDSOCKS_FILTER -d 192.168.0.0/16 -j RETURN
-    iptables -t nat -A REDSOCKS_FILTER -d 224.0.0.0/4 -j RETURN
-    iptables -t nat -A REDSOCKS_FILTER -d 240.0.0.0/4 -j RETURN
-    iptables -t nat -A REDSOCKS_FILTER -j REDSOCKS
+    iptables -t nat -A REDSOCKS -d 0.0.0.0/8 -j RETURN
+    iptables -t nat -A REDSOCKS -d 10.0.0.0/24 -j RETURN
+    iptables -t nat -A REDSOCKS -d 127.0.0.0/8 -j RETURN
+    iptables -t nat -A REDSOCKS -d 169.254.0.0/16 -j RETURN
+    iptables -t nat -A REDSOCKS -d 172.16.0.0/12 -j RETURN
+    iptables -t nat -A REDSOCKS -d 192.168.0.0/16 -j RETURN
+    iptables -t nat -A REDSOCKS -d 224.0.0.0/4 -j RETURN
+    iptables -t nat -A REDSOCKS -d 240.0.0.0/4 -j RETURN
 
-    ip6tables -t nat -A REDSOCKS_FILTER -d fe80::/64 -j RETURN
+    ip6tables -t nat -A REDSOCKS -d fe80::/64 -j RETURN
 
 
     ## Do not redirect traffic for the SOCKS-Server
@@ -193,15 +182,15 @@ then
 
     ## Filter all traffic from the own host
     ## BE CAREFULL HERE IF THE SOCKS-SERVER RUNS ON THIS MACHINE
-    iptables -t nat -A OUTPUT     -p tcp -j REDSOCKS_FILTER
+    iptables -t nat -A OUTPUT     -p tcp -j REDSOCKS
 
-    ip6tables -t nat -A OUTPUT     -p tcp -j REDSOCKS_FILTER
+    ip6tables -t nat -A OUTPUT     -p tcp -j REDSOCKS
 
 
     # Filter all traffic that is routed over this host
-    iptables -t nat -A PREROUTING -p tcp -j REDSOCKS_FILTER
+    iptables -t nat -A PREROUTING -p tcp -j REDSOCKS
 
-    ip6tables -t nat -A PREROUTING -p tcp -j REDSOCKS_FILTER
+    ip6tables -t nat -A PREROUTING -p tcp -j REDSOCKS
 fi
 
 
