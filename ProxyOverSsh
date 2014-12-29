@@ -66,6 +66,7 @@ command -v redsocks >/dev/null 2>&1 || { echo >&2 "I require redsocks but it's n
 
 # save defaults
 if [ -f /tmp/iptables.rules ]; then
+    echo
     echo "Backup of iptables (/tmp/iptables.rules) exists."
     read -p "Are you want to overwrite its by current rules? " -n 1 -r
     echo    # (optional) move to a new line
@@ -77,6 +78,7 @@ else
     iptables-save > /tmp/iptables.rules
 fi
 if [ -f /tmp/ip6tables.rules ]; then
+    echo
     echo "Backup of iptables (/tmp/ip6tables.rules) exists."
     read -p "Are you want to overwrite its by current rules? " -n 1 -r
     echo    # (optional) move to a new line
@@ -88,6 +90,7 @@ else
     ip6tables-save > /tmp/ip6tables.rules
 fi
 if [ -f /etc/redsocks.conf.back ]; then
+    echo
     echo "Backup of redsocks (/etc/redsocks.conf) exists."
     read -p "Are you want to overwrite its by custom rules? " -n 1 -r
     echo    # (optional) move to a new line
@@ -100,6 +103,7 @@ else
 fi
 
 # set new redsock config
+echo
 read -p "Are you want to overwrite current redsocks config? " -n 1 -r
 echo    # (optional) move to a new line
 if [[ $REPLY =~ ^[Yy]$ ]]
@@ -131,6 +135,7 @@ EOF
 fi
 
 # set new iptables rules
+echo
 read -p "Are you want to overwrite current iptable rules? " -n 1 -r
 echo    # (optional) move to a new line
 if [[ $REPLY =~ ^[Yy]$ ]]
@@ -195,11 +200,13 @@ fi
 
 
 # start redsock
+echo
 echo "Starting redsock on localhost:$REDPORT"
 redsocks
 
 
 # start proxy
+echo
 echo "Starting proxy on localhost:$PROXYPORT"
 ssh -C2TnN -D $PROXYPORT -p $PORT $USER@$HOST $KEY
 echo ""
