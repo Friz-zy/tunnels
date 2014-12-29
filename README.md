@@ -12,3 +12,4 @@ Useful links:
 - http://pastebin.com/rq7A9291
 - http://linuxaria.com/article/redirect-all-tcp-traffic-through-transparent-socks5-proxy-in-linux
 - http://openvz.org/VPN_via_the_TUN/TAP_device
+- http://przemoc.net/tips/linux#making_socks_proxy_transparent
