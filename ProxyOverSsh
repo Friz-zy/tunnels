@@ -3,21 +3,24 @@
 # The MIT License (MIT)
 # part of the https://github.com/Friz-zy/tunnels
 
+# http://przemoc.net/tips/linux#making_socks_proxy_transparent
+
 
 USER='root'
 PORT='22'
 KEY=""
-PROXY='3128'
+PROXYPORT='3128'
+REDPORT='12345'
 
 usage()
 {
     cat <<EOF
-$1 -h|--help -u|--user=<user> -H|--host=<host> -p|--port=<port> -P|--proxy=<proxy_port> -k|--key=<path_to_ssh_key>
+$1 -h|--help -u|--user=<ssh_user> -H|--host=<ssh_host> -p|--port=<ssh_port> -k|--key=<path_to_ssh_key> -P|--proxy=<local_proxy_port> -r|--rport=<local_port_for_redsocks>
 EOF
     return 0
 }
 
-options=$(getopt -o hu:H:p:P:k: -l help,user:,host:,port:,proxy:,key: -- "$@")
+options=$(getopt -o hu:H:p:P:k:r: -l help,user:,host:,port:,proxy:,key:,rport: -- "$@")
 if [ $? -ne 0 ]; then
     usage $(basename $0)
     exit 1
@@ -31,8 +34,9 @@ do
         -u|--user)      USER=$2; shift 2;;
         -H|--host)      HOST=$2; shift 2;;
         -p|--port)      PORT=$2; shift 2;;
-        -P|--proxy)     PROXY=$2; shift 2;;
+        -P|--proxy)     PROXYPORT=$2; shift 2;;
         -k|--key)       KEY=$2; shift 2;;
+        -r|--rport)     REDPORT=$2; shift 2;;
         *)              break ;;
     esac
 done
@@ -58,6 +62,8 @@ if [ -n "$KEY" ]; then
     KEY="-i $KEY"
 fi
 
+command -v redsocks >/dev/null 2>&1 || { echo >&2 "I require redsocks but it's not installed. Aborting..."; exit 1; }
+
 # save defaults
 if [ -f /tmp/iptables.rules ]; then
     echo "Backup of iptables (/tmp/iptables.rules) exists."
@@ -81,110 +87,124 @@ if [ -f /tmp/ip6tables.rules ]; then
 else
     ip6tables-save > /tmp/ip6tables.rules
 fi
+if [ -f /etc/redsocks.conf.back ]; then
+    echo "Backup of redsocks (/etc/redsocks.conf) exists."
+    read -p "Are you want to overwrite its by custom rules? " -n 1 -r
+    echo    # (optional) move to a new line
+    if [[ $REPLY =~ ^[Yy]$ ]]
+    then
+        cp /etc/redsocks.conf /etc/redsocks.conf.back
+    fi
+else
+    cp /etc/redsocks.conf /etc/redsocks.conf.back
+fi
 
+# set new redsock config
+read -p "Are you want to overwrite current redsocks config? " -n 1 -r
+echo    # (optional) move to a new line
+if [[ $REPLY =~ ^[Yy]$ ]]
+then
+        cat <<EOF > /etc/redsocks.conf
+base {
+    // debug: connection progress & client list on SIGUSR1
+    log_debug = off;
+
+    // info: start and end of client session
+    log_info = on;
+
+    log = "syslog:daemon";
+
+    // detach from console
+    daemon = on;
+
+    redirector = iptables;
+}
+
+redsocks {
+    local_ip = 127.0.0.1;
+    local_port = $REDPORT;
+    ip = 127.0.0.1;
+    port = $PROXYPORT;
+    type = socks5;
+}
+EOF
+fi
 
 # set new iptables rules
 read -p "Are you want to overwrite current iptable rules? " -n 1 -r
 echo    # (optional) move to a new line
-if [[ ! $REPLY =~ ^[Yy]$ ]]
+if [[ $REPLY =~ ^[Yy]$ ]]
 then
-    echo "Aborting..."
-    exit 1
+    iptables -t nat -D PREROUTING -p tcp -j REDSOCKS_FILTER 2>/dev/null
+    iptables -t nat -D OUTPUT     -p tcp -j REDSOCKS_FILTER 2>/dev/null
+    iptables -t nat -F REDSOCKS_FILTER 2>/dev/null
+    iptables -t nat -X REDSOCKS_FILTER 2>/dev/null
+    iptables -t nat -F REDSOCKS 2>/dev/null
+    iptables -t nat -X REDSOCKS 2>/dev/null
+
+    # Create our own chain
+    iptables -t nat -N REDSOCKS
+    iptables -t nat -N REDSOCKS_FILTER
+
+    # Do not try to redirect local traffic
+    iptables -t nat -I REDSOCKS_FILTER -o lo -j RETURN
+
+    ## Do not redirect LAN traffic and some other reserved addresses. (blacklist option)
+    iptables -t nat -A REDSOCKS_FILTER -d 0.0.0.0/8 -j RETURN
+    iptables -t nat -A REDSOCKS_FILTER -d 10.0.0.0/24 -j RETURN
+    iptables -t nat -A REDSOCKS_FILTER -d 127.0.0.0/8 -j RETURN
+    iptables -t nat -A REDSOCKS_FILTER -d 169.254.0.0/16 -j RETURN
+    iptables -t nat -A REDSOCKS_FILTER -d 172.16.0.0/12 -j RETURN
+    iptables -t nat -A REDSOCKS_FILTER -d 192.168.0.0/16 -j RETURN
+    iptables -t nat -A REDSOCKS_FILTER -d 224.0.0.0/4 -j RETURN
+    iptables -t nat -A REDSOCKS_FILTER -d 240.0.0.0/4 -j RETURN
+    iptables -t nat -A REDSOCKS_FILTER -j REDSOCKS
+
+    ## Do not redirect traffic for the SOCKS-Server
+    ## Not needed if server is not on a whitelist or is already blacklisted.
+    iptables -t nat -I REDSOCKS -p tcp -d $IP --dport $PORT -j RETURN
+
+    # Redirect all traffic that gets to the end of our chain
+    iptables -t nat -A REDSOCKS   -p tcp -j REDIRECT --to-port $REDPORT
+
+    ## Filter all traffic from the own host
+    ## BE CAREFULL HERE IF THE SOCKS-SERVER RUNS ON THIS MACHINE
+    iptables -t nat -A OUTPUT     -p tcp -j REDSOCKS_FILTER
+
+    # Filter all traffic that is routed over this host
+    iptables -t nat -A PREROUTING -p tcp -j REDSOCKS_FILTER
 fi
 
-## flush existing rules
-iptables -F INPUT
-iptables -F OUTPUT
-iptables -F FORWARD
 
-ip6tables -F INPUT
-ip6tables -F OUTPUT
-ip6tables -F FORWARD
-
-
-## allow loopback access
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A OUTPUT -o lo -j ACCEPT
-
-ip6tables -A INPUT -i lo -j ACCEPT
-ip6tables -A OUTPUT -o lo -j ACCEPT
-
-
-## allow already established/accepted connections on all devices
-## put in front for performance reasons
-#iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-#iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-
-#ip6tables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-#ip6tables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-
-
-## make sure that you can communicate within your own network
-iptables -A INPUT -s 192.168.0.0/16 -d 192.168.0.0/16 -j ACCEPT
-iptables -A OUTPUT -s 192.168.0.0/16 -d 192.168.0.0/16 -j ACCEPT
-## lxc, vpn, work, etc...
-iptables -A INPUT -s 10.0.0.0/24 -d 10.0.0.0/24 -j ACCEPT
-iptables -A OUTPUT -s 10.0.0.0/24 -d 10.0.0.0/24 -j ACCEPT
-
-ip6tables -A INPUT -s fe80::/64 -d fe80::/64 -j ACCEPT
-ip6tables -A OUTPUT -s fe80::/64 -d fe80::/64 -j ACCEPT
-
-
-## disable ssh connections over vpn. You just need to disable it, if you have setup port forwarding to your ssh port
-#iptables -A INPUT -i tun0 -p tcp --dport ssh -j DROP
-
-#ip6tables -A INPUT -i tun0 -p tcp --dport ssh -j DROP
-
-
-## accept all tun connections
-iptables -A OUTPUT -o tun+ -j ACCEPT
-iptables -A INPUT -i tun+ -j ACCEPT
-
-ip6tables -A OUTPUT -o tun+ -j ACCEPT
-ip6tables -A INPUT -i tun+ -j ACCEPT
-
-
-## lxc
-iptables -A POSTROUTING -o lxcbr0 -p udp -m udp --dport 68 -j CHECKSUM --checksum-fill
-iptables -A POSTROUTING -s 10.0.3.0/24 ! -d 10.0.3.0/24 -j MASQUERADE
-iptables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 53 -j ACCEPT
-iptables -A INPUT -i lxcbr0 -p udp -m udp --dport 53 -j ACCEPT
-iptables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 67 -j ACCEPT
-iptables -A INPUT -i lxcbr0 -p udp -m udp --dport 67 -j ACCEPT
-iptables -A FORWARD -o lxcbr0 -j ACCEPT
-iptables -A FORWARD -i lxcbr0 -j ACCEPT
-
-ip6tables -A POSTROUTING -o lxcbr0 -p udp -m udp --dport 68 -j CHECKSUM --checksum-fill
-ip6tables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 53 -j ACCEPT
-ip6tables -A INPUT -i lxcbr0 -p udp -m udp --dport 53 -j ACCEPT
-ip6tables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 67 -j ACCEPT
-ip6tables -A INPUT -i lxcbr0 -p udp -m udp --dport 67 -j ACCEPT
-ip6tables -A FORWARD -o lxcbr0 -j ACCEPT
-ip6tables -A FORWARD -i lxcbr0 -j ACCEPT
-
-
-## ssh to proxy host
-iptables -A INPUT -p tcp -s $IP -j ACCEPT
-iptables -A OUTPUT -p tcp --dport $PORT -d $IP -j ACCEPT
-
-ip6tables -A INPUT -p tcp -s $IP -j ACCEPT
-ip6tables -A OUTPUT -p tcp --dport $PORT -d $IP -j ACCEPT
-
-
-iptables -t nat -A OUTPUT -p tcp -j REDIRECT --to-ports $PROXY
+# start redsock
+echo "Starting redsock on localhost:$REDPORT"
+redsocks
 
 
 # start proxy
-ssh -C2qTnN -D $PROXY -p $PORT $USER@$HOST $KEY
+echo "Starting proxy on localhost:$PROXYPORT"
+ssh -C2TnN -D $PROXYPORT -p $PORT $USER@$HOST $KEY
+echo ""
+
 
 echo "Warning, the tunnel became into a pumpkin!"
 echo "You got out of the security zone!"
 
-read -p "Are you want restore default routes and iptable rules? " -n 1 -r
+
+read -p "Are you want restore default redsocks config and iptable rules? " -n 1 -r
 echo    # (optional) move to a new line
 if [[ $REPLY =~ ^[Yy]$ ]]
 then
     # restor defaults
     iptables-restore < /tmp/iptables.rules
     ip6tables-restore < /tmp/ip6tables.rules
+    # restor redsock config
+    cp /etc/redsocks.conf.back /etc/redsocks.conf
 fi
+
+
+echo "Killing redsocks..."
+pkill redsocks 2>/dev/null
+
+
+echo "Bye!"
