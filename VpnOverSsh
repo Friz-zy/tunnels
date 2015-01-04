@@ -8,6 +8,14 @@ USER='root'
 PORT='22'
 KEY=""
 
+usage()
+{
+    cat <<EOF
+$1 -h|--help -u|--user=<ssh_user> -H|--host=<ssh_host> -p|--port=<ssh_port> -k|--key=<path_to_ssh_key>
+EOF
+    return 0
+}
+
 options=$(getopt -o hu:H:p:k: -l help,user:,host:,port:,key: -- "$@")
 if [ $? -ne 0 ]; then
     usage $(basename $0)
@@ -38,7 +46,10 @@ if [ -z "$HOST" ]; then
     exit 1
 fi
 
-IP="$(nslookup $HOST | awk '/^Address: / { print $2 ; exit }')"
+IP=$(echo $HOST | grep -E '\b(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b')
+if [ -z "$IP" ]; then
+    IP="$(nslookup $HOST | awk '/^Address: / { print $2 ; exit }')"
+fi
 DEFGATE=$(ip route | awk '/default/ { print $3 }')
 
 if [ -n "$KEY" ]; then
@@ -82,115 +93,130 @@ fi
 
 
 # set new iptables rules
-read -p "Are you want to overwrite current routes and iptable rules? " -n 1 -r
+echo
+read -p "Are you want to overwrite current iptable rules? " -n 1 -r
 echo    # (optional) move to a new line
-if [[ ! $REPLY =~ ^[Yy]$ ]]
+if [[ $REPLY =~ ^[Yy]$ ]]
 then
-    echo "Aborting..."
-    exit 1
+    ## flush existing rules
+    iptables -F INPUT
+    iptables -F OUTPUT
+    iptables -F FORWARD
+
+    ip6tables -F INPUT
+    ip6tables -F OUTPUT
+    ip6tables -F FORWARD
+
+
+    ## allow loopback access
+    iptables -A INPUT -i lo -j ACCEPT
+    iptables -A OUTPUT -o lo -j ACCEPT
+
+    ip6tables -A INPUT -i lo -j ACCEPT
+    ip6tables -A OUTPUT -o lo -j ACCEPT
+
+
+    ## allow already established/accepted connections on all devices
+    ## put in front for performance reasons
+    #iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+    #iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+    #ip6tables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+    #ip6tables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+
+    ## Do not redirect LAN traffic and some other reserved addresses. (blacklist option)
+    iptables -A OUTPUT -d 0.0.0.0/8 -j ACCEPT
+    iptables -A OUTPUT -d 10.0.0.0/24 -j ACCEPT
+    iptables -A OUTPUT -d 127.0.0.0/8 -j ACCEPT
+    iptables -A OUTPUT -d 169.254.0.0/16 -j ACCEPT
+    iptables -A OUTPUT -d 172.16.0.0/12 -j ACCEPT
+    iptables -A OUTPUT -d 192.168.0.0/16 -j ACCEPT
+    iptables -A OUTPUT -d 224.0.0.0/4 -j ACCEPT
+    iptables -A OUTPUT -d 240.0.0.0/4 -j ACCEPT
+    iptables -A INPUT -s 0.0.0.0/8 -j ACCEPT
+    iptables -A INPUT -s 10.0.0.0/24 -j ACCEPT
+    iptables -A INPUT -s 127.0.0.0/8 -j ACCEPT
+    iptables -A INPUT -s 169.254.0.0/16 -j ACCEPT
+    iptables -A INPUT -s 172.16.0.0/12 -j ACCEPT
+    iptables -A INPUT -s 192.168.0.0/16 -j ACCEPT
+    iptables -A INPUT -s 224.0.0.0/4 -j ACCEPT
+    iptables -A INPUT -s 240.0.0.0/4 -j ACCEPT
+
+    ip6tables -A OUTPUT -d fe80::/64 -j ACCEPT
+    ip6tables -A INPUT -s fe80::/64 -j ACCEPT
+
+
+    ## disable ssh connections over vpn. You just need to disable it, if you have setup port forwarding to your ssh port
+    #iptables -A INPUT -i tun0 -p tcp --dport ssh -j DROP
+
+    #ip6tables -A INPUT -i tun0 -p tcp --dport ssh -j DROP
+
+
+    ## allow vpn establishment
+    iptables -A OUTPUT -p udp --dport 1194 -j ACCEPT
+    iptables -A INPUT -p udp --sport 1194 -j ACCEPT
+
+    ip6tables -A OUTPUT -p udp --dport 1194 -j ACCEPT
+    ip6tables -A INPUT -p udp --sport 1194 -j ACCEPT
+
+
+    ## accept all tun connections
+    iptables -A OUTPUT -o tun+ -j ACCEPT
+    iptables -A INPUT -i tun+ -j ACCEPT
+
+    ip6tables -A OUTPUT -o tun+ -j ACCEPT
+    ip6tables -A INPUT -i tun+ -j ACCEPT
+
+
+    ## lxc
+    iptables -A POSTROUTING -o lxcbr0 -p udp -m udp --dport 68 -j CHECKSUM --checksum-fill
+    iptables -A POSTROUTING -s 10.0.3.0/24 ! -d 10.0.3.0/24 -j MASQUERADE
+    iptables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 53 -j ACCEPT
+    iptables -A INPUT -i lxcbr0 -p udp -m udp --dport 53 -j ACCEPT
+    iptables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 67 -j ACCEPT
+    iptables -A INPUT -i lxcbr0 -p udp -m udp --dport 67 -j ACCEPT
+    iptables -A FORWARD -o lxcbr0 -j ACCEPT
+    iptables -A FORWARD -i lxcbr0 -j ACCEPT
+
+    ip6tables -A POSTROUTING -o lxcbr0 -p udp -m udp --dport 68 -j CHECKSUM --checksum-fill
+    ip6tables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 53 -j ACCEPT
+    ip6tables -A INPUT -i lxcbr0 -p udp -m udp --dport 53 -j ACCEPT
+    ip6tables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 67 -j ACCEPT
+    ip6tables -A INPUT -i lxcbr0 -p udp -m udp --dport 67 -j ACCEPT
+    ip6tables -A FORWARD -o lxcbr0 -j ACCEPT
+    ip6tables -A FORWARD -i lxcbr0 -j ACCEPT
+
+
+    ## ssh to proxy host
+    iptables -A INPUT -p tcp -s $IP -j ACCEPT
+    iptables -A OUTPUT -p tcp --dport $PORT -d $IP -j ACCEPT
+
+    ip6tables -A INPUT -p tcp -s $IP -j ACCEPT
+    ip6tables -A OUTPUT -p tcp --dport $PORT -d $IP -j ACCEPT
+
+
+    ## set default policy
+    iptables -P INPUT DROP
+    iptables -P OUTPUT DROP
+    iptables -P FORWARD DROP
+
+    ip6tables -P INPUT DROP
+    ip6tables -P OUTPUT DROP
+    ip6tables -P FORWARD DROP
 fi
-
-## flush existing rules
-iptables -F INPUT
-iptables -F OUTPUT
-iptables -F FORWARD
-
-ip6tables -F INPUT
-ip6tables -F OUTPUT
-ip6tables -F FORWARD
-
-
-## allow loopback access
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A OUTPUT -o lo -j ACCEPT
-
-ip6tables -A INPUT -i lo -j ACCEPT
-ip6tables -A OUTPUT -o lo -j ACCEPT
-
-
-## allow already established/accepted connections on all devices
-## put in front for performance reasons
-#iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-#iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-
-#ip6tables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-#ip6tables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-
-
-## make sure that you can communicate within your own network
-iptables -A INPUT -s 192.168.0.0/16 -d 192.168.0.0/16 -j ACCEPT
-iptables -A OUTPUT -s 192.168.0.0/16 -d 192.168.0.0/16 -j ACCEPT
-## lxc, vpn, work, etc...
-iptables -A INPUT -s 10.0.0.0/24 -d 10.0.0.0/24 -j ACCEPT
-iptables -A OUTPUT -s 10.0.0.0/24 -d 10.0.0.0/24 -j ACCEPT
-
-ip6tables -A INPUT -s fe80::/64 -d fe80::/64 -j ACCEPT
-ip6tables -A OUTPUT -s fe80::/64 -d fe80::/64 -j ACCEPT
-
-
-## disable ssh connections over vpn. You just need to disable it, if you have setup port forwarding to your ssh port
-#iptables -A INPUT -i tun0 -p tcp --dport ssh -j DROP
-
-#ip6tables -A INPUT -i tun0 -p tcp --dport ssh -j DROP
-
-
-## allow vpn establishment
-iptables -A OUTPUT -p udp --dport 1194 -j ACCEPT
-iptables -A INPUT -p udp --sport 1194 -j ACCEPT
-
-ip6tables -A OUTPUT -p udp --dport 1194 -j ACCEPT
-ip6tables -A INPUT -p udp --sport 1194 -j ACCEPT
-
-
-## accept all tun connections
-iptables -A OUTPUT -o tun+ -j ACCEPT
-iptables -A INPUT -i tun+ -j ACCEPT
-
-ip6tables -A OUTPUT -o tun+ -j ACCEPT
-ip6tables -A INPUT -i tun+ -j ACCEPT
-
-
-## lxc
-iptables -A POSTROUTING -o lxcbr0 -p udp -m udp --dport 68 -j CHECKSUM --checksum-fill
-iptables -A POSTROUTING -s 10.0.3.0/24 ! -d 10.0.3.0/24 -j MASQUERADE
-iptables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 53 -j ACCEPT
-iptables -A INPUT -i lxcbr0 -p udp -m udp --dport 53 -j ACCEPT
-iptables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 67 -j ACCEPT
-iptables -A INPUT -i lxcbr0 -p udp -m udp --dport 67 -j ACCEPT
-iptables -A FORWARD -o lxcbr0 -j ACCEPT
-iptables -A FORWARD -i lxcbr0 -j ACCEPT
-
-ip6tables -A POSTROUTING -o lxcbr0 -p udp -m udp --dport 68 -j CHECKSUM --checksum-fill
-ip6tables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 53 -j ACCEPT
-ip6tables -A INPUT -i lxcbr0 -p udp -m udp --dport 53 -j ACCEPT
-ip6tables -A INPUT -i lxcbr0 -p tcp -m tcp --dport 67 -j ACCEPT
-ip6tables -A INPUT -i lxcbr0 -p udp -m udp --dport 67 -j ACCEPT
-ip6tables -A FORWARD -o lxcbr0 -j ACCEPT
-ip6tables -A FORWARD -i lxcbr0 -j ACCEPT
-
-
-## ssh to proxy host
-iptables -A INPUT -p tcp -s $IP -j ACCEPT
-iptables -A OUTPUT -p tcp --dport $PORT -d $IP -j ACCEPT
-
-ip6tables -A INPUT -p tcp -s $IP -j ACCEPT
-ip6tables -A OUTPUT -p tcp --dport $PORT -d $IP -j ACCEPT
-
-
-## set default policy
-iptables -P INPUT DROP
-iptables -P OUTPUT DROP
-iptables -P FORWARD DROP
-
-ip6tables -P INPUT DROP
-ip6tables -P OUTPUT DROP
-ip6tables -P FORWARD DROP
 
 
 # set new routes
-ip route add $IP via $DEFGATE
-#ip route add 8.8.8.8 via $DEFGATE
-ip route replace default via 10.0.8.2
+echo
+read -p "Are you want to overwrite current route table? " -n 1 -r
+echo    # (optional) move to a new line
+if [[ $REPLY =~ ^[Yy]$ ]]
+then
+    ip route add $IP via $DEFGATE
+    #ip route add 8.8.8.8 via $DEFGATE
+    ip route replace default via 10.0.8.2
+fi
 
 
 # ppp tunnel
