@@ -201,6 +201,8 @@ fi
 
 # start redsock
 echo
+echo "Killing redsocks..."
+pkill redsocks 2>/dev/null
 echo "Starting redsock on localhost:$REDPORT"
 redsocks
 
