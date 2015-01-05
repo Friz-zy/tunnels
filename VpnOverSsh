@@ -127,7 +127,7 @@ then
 
     ## Do not redirect LAN traffic and some other reserved addresses. (blacklist option)
     iptables -A OUTPUT -d 0.0.0.0/8 -j ACCEPT
-    iptables -A OUTPUT -d 10.0.0.0/24 -j ACCEPT
+    iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT
     iptables -A OUTPUT -d 127.0.0.0/8 -j ACCEPT
     iptables -A OUTPUT -d 169.254.0.0/16 -j ACCEPT
     iptables -A OUTPUT -d 172.16.0.0/12 -j ACCEPT
@@ -135,7 +135,7 @@ then
     iptables -A OUTPUT -d 224.0.0.0/4 -j ACCEPT
     iptables -A OUTPUT -d 240.0.0.0/4 -j ACCEPT
     iptables -A INPUT -s 0.0.0.0/8 -j ACCEPT
-    iptables -A INPUT -s 10.0.0.0/24 -j ACCEPT
+    iptables -A INPUT -s 10.0.0.0/8 -j ACCEPT
     iptables -A INPUT -s 127.0.0.0/8 -j ACCEPT
     iptables -A INPUT -s 169.254.0.0/16 -j ACCEPT
     iptables -A INPUT -s 172.16.0.0/12 -j ACCEPT
